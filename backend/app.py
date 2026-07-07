@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -23,8 +24,10 @@ from backend.analyzer import build_analysis
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "網站原型"
-SCHOOLS_DIR = ROOT / "分校資料"
-INDEX_DIR = ROOT / "00_資料索引"
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+DATA_ROOT = Path(os.environ.get("GIRAFFE_DATA_ROOT") or ("/tmp/giraffe-education-advisory" if IS_VERCEL else ROOT)).resolve()
+SCHOOLS_DIR = DATA_ROOT / "分校資料"
+INDEX_DIR = DATA_ROOT / "00_資料索引"
 DB_PATH = INDEX_DIR / "教務輔導.db"
 SCHOOL_CSV = INDEX_DIR / "分校清冊.csv"
 OCR_SCRIPT = ROOT / "backend" / "ocr.swift"
@@ -56,6 +59,21 @@ CATEGORY_FOLDERS = {
 
 class AssignmentRequest(BaseModel):
     counselor_id: str
+
+
+def current_data_root() -> Path:
+    if SCHOOLS_DIR.name == "分校資料":
+        return SCHOOLS_DIR.parent.resolve()
+    return DATA_ROOT
+
+
+def data_relative(path: Path) -> str:
+    return str(path.resolve().relative_to(current_data_root()))
+
+
+def data_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else current_data_root() / path
 
 
 def now_iso() -> str:
@@ -141,7 +159,7 @@ def import_existing_schools() -> None:
                         "分校代碼": code.upper(),
                         "分校名稱": name,
                         "所屬區域": region_dir.name,
-                        "資料夾路徑": str(school_dir.relative_to(ROOT)),
+                        "資料夾路徑": data_relative(school_dir),
                     }
                 )
 
@@ -323,10 +341,10 @@ def run_analysis_job(school_code: str, upload_id: str) -> None:
             school=school,
             upload_id=upload_id,
             file_records=[dict(row) for row in file_rows],
-            root=ROOT,
+            root=current_data_root(),
             ocr_script=OCR_SCRIPT,
         )
-        output_dir = ROOT / school_row["folder_path"] / "90_分析產出" / "內容解析"
+        output_dir = data_path(school_row["folder_path"]) / "90_分析產出" / "內容解析"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{upload_id}.json"
         output_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -354,7 +372,7 @@ def run_analysis_job(school_code: str, upload_id: str) -> None:
     with db_connect() as db:
         db.execute(
             "UPDATE uploads SET status = ?, analysis_status = ?, analysis_path = ? WHERE id = ?",
-            (status, analysis_status, str(output_path.relative_to(ROOT)), upload_id),
+            (status, analysis_status, data_relative(output_path), upload_id),
         )
 
 
@@ -383,12 +401,14 @@ app = FastAPI(title="教務輔導決策平台本機後端", lifespan=lifespan)
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    usage = shutil.disk_usage(ROOT)
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(DATA_ROOT)
     return {
         "ok": True,
+        "runtime": "vercel" if IS_VERCEL else "local",
         "freeBytes": usage.free,
         "maxBatchBytes": MAX_BATCH_BYTES,
-        "database": str(DB_PATH.relative_to(ROOT)),
+        "database": data_relative(DB_PATH),
     }
 
 
@@ -438,7 +458,7 @@ async def receive_upload(
                 raise HTTPException(409, f"分校代碼 {code} 已存在")
             name = sanitize_school_name(school_name)
             school_folder = ensure_school_folders(region, code, name)
-            relative_folder = str(school_folder.relative_to(ROOT))
+            relative_folder = data_relative(school_folder)
             db.execute(
                 """
                 INSERT INTO schools
@@ -453,7 +473,7 @@ async def receive_upload(
         elif school["region"] != region:
             raise HTTPException(400, "分校與區域不一致")
 
-    school_folder = ROOT / school["folder_path"]
+    school_folder = data_path(school["folder_path"])
     ensure_school_folders(school["region"], school["code"], school["name"])
     upload_id = uuid.uuid4().hex[:16]
     stored_files: list[dict[str, object]] = []
@@ -485,7 +505,7 @@ async def receive_upload(
             stored_files.append(
                 {
                     "originalName": original_name,
-                    "storedPath": str(target_path.relative_to(ROOT)),
+                    "storedPath": data_relative(target_path),
                     "predictedCategory": predicted,
                     "fileYear": file_year,
                     "sizeBytes": file_bytes,
@@ -560,7 +580,7 @@ async def receive_upload(
             "school": school_to_dict(school),
             "status": status,
             "fileCount": len(stored_files),
-            "manifestPath": str(manifest_path.relative_to(ROOT)),
+            "manifestPath": data_relative(manifest_path),
         },
     )
 
@@ -614,7 +634,7 @@ def school_analysis(school_code: str) -> dict[str, object]:
 
     analyses: list[dict[str, object]] = []
     for upload in uploads:
-        path = ROOT / upload["analysis_path"]
+        path = data_path(upload["analysis_path"])
         if not path.exists():
             continue
         analysis = json.loads(path.read_text(encoding="utf-8"))

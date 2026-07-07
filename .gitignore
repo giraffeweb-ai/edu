@@ -1,0 +1,20 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local runtime data
+00_資料索引/
+分校資料/
+公司規範/
+
+# Local/generated upload artifacts
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+# Environment/secrets
+.env
+.env.*
+

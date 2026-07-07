@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>教務輔導決策平台</title>
+  <link rel="stylesheet" href="styles.css?v=20260703-4">
+</head>
+<body>
+  <section id="loginView" class="login-shell">
+    <div class="login-brand">
+      <div class="brand-mark brand-mark--large">G</div>
+      <div>
+        <p class="eyebrow">Education Advisory Intelligence</p>
+        <h1>教務輔導<br>決策平台</h1>
+        <p class="login-lead">將分校數據、校務評鑑與歷次輔導紀錄，整理成可追蹤、可比較、可行動的管理資訊。</p>
+      </div>
+      <div class="login-feature-grid">
+        <article>
+          <span>01</span>
+          <strong>分級視野</strong>
+          <p>依總公司、區域主管及輔導員權限呈現適當資料。</p>
+        </article>
+        <article>
+          <span>02</span>
+          <strong>趨勢洞察</strong>
+          <p>快速掌握學生人數、校評與續約指標的歷年變化。</p>
+        </article>
+        <article>
+          <span>03</span>
+          <strong>輔導追蹤</strong>
+          <p>集中管理改善事項、負責人、期限及執行狀態。</p>
+        </article>
+      </div>
+      <p class="login-version">展示版本 · 資料基準日 2026.07.02</p>
+    </div>
+
+    <div class="login-panel">
+      <div class="login-card">
+        <div class="mobile-logo">
+          <div class="brand-mark">G</div>
+          <strong>教務輔導決策平台</strong>
+        </div>
+        <p class="eyebrow eyebrow--green">SECURE ACCESS</p>
+        <h2>歡迎回來</h2>
+        <p class="muted">請使用公司帳號登入系統</p>
+
+        <form id="loginForm">
+          <label for="username">帳號</label>
+          <div class="input-wrap">
+            <span aria-hidden="true">◎</span>
+            <input id="username" name="username" value="hq" autocomplete="username" required>
+          </div>
+          <label for="password">密碼</label>
+          <div class="input-wrap">
+            <span aria-hidden="true">⌁</span>
+            <input id="password" name="password" type="password" value="demo123" autocomplete="current-password" required>
+            <button id="togglePassword" class="icon-button" type="button" aria-label="顯示密碼">顯示</button>
+          </div>
+          <div class="login-options">
+            <label class="check-label"><input type="checkbox" checked> 記住帳號</label>
+            <button class="text-button" type="button">忘記密碼？</button>
+          </div>
+          <p id="loginError" class="form-error" role="alert"></p>
+          <button class="primary-button primary-button--wide" type="submit">登入系統 <span>→</span></button>
+        </form>
+
+        <div class="demo-divider"><span>展示角色快速登入</span></div>
+        <div id="demoAccounts" class="demo-accounts"></div>
+        <p class="prototype-note">本頁為前台展示原型；正式版帳號與資料權限將由後端驗證。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="appView" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">G</div>
+        <div><strong>教務輔導</strong><small>決策平台</small></div>
+      </div>
+      <nav id="mainNav" class="main-nav" aria-label="主要導覽"></nav>
+      <div class="sidebar-bottom">
+        <div class="sync-status"><span></span><div><strong>資料已同步</strong><small>2026.07.02 12:07</small></div></div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <button id="mobileMenu" class="mobile-menu" aria-label="開啟選單">☰</button>
+          <p id="breadcrumb" class="breadcrumb">全台總覽</p>
+          <h2 id="pageTitle">營運決策儀表板</h2>
+        </div>
+        <div class="topbar-actions">
+          <div id="scopeFilters" class="scope-filters">
+            <label>區域<select id="regionSelect"><option>北區</option></select></label>
+            <label>分校<select id="schoolSelect"><option>GN26058 新北八里分校</option></select></label>
+          </div>
+          <button id="notificationButton" class="round-button" aria-label="通知">♢<i>3</i></button>
+          <div class="user-card">
+            <div id="userAvatar" class="avatar">總</div>
+            <div><strong id="userName">總公司管理者</strong><small id="userRole">總公司權限</small></div>
+          </div>
+          <button id="topLogoutButton" class="top-logout-button" type="button" aria-label="登出系統">登出</button>
+        </div>
+      </header>
+      <div id="content" class="content"></div>
+    </main>
+  </section>
+
+  <dialog id="renewalDialog" class="detail-dialog" aria-labelledby="renewalDialogTitle">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow eyebrow--green">RENEWAL COMPLIANCE · GN26058</p>
+        <h2 id="renewalDialogTitle">續約條件詳細檢核</h2>
+        <p>本約期 2026.07.01–2027.06.30，依公司正式規範重新累計</p>
+      </div>
+      <button id="closeRenewalDialog" class="dialog-close" type="button" aria-label="關閉續約條件詳細檢核">×</button>
+    </div>
+    <div class="dialog-summary">
+      <div><span>目前結果</span><strong>0 項達標／4 項累計中</strong></div>
+      <p>新約期自 2026.07.01 起算，前一約期數據只能作為歷史參考，不得直接帶入本約期達標判定。</p>
+    </div>
+    <div class="renewal-detail-list">
+      <article>
+        <div class="renewal-number">01</div>
+        <div class="renewal-detail-main">
+          <div class="renewal-title"><div><h3>大型會議與研討活動</h3><p>大型會議均出席，研討活動每年出席超過 12 次，以簽到紀錄為主。</p></div><span class="status-pill bad">尚未達標</span></div>
+          <div class="renewal-facts"><div><span>公司標準</span><strong>本約期 ＞ 12 次</strong></div><div><span>本約期現況</span><strong>0 次</strong></div><div><span>歷史參考</span><strong>前一約期 16 次</strong></div></div>
+          <p class="evidence-message warn">本約期剛開始，前一約期出席次數不得直接帶入，須依新期間簽到紀錄重新累計。</p>
+        </div>
+      </article>
+      <article>
+        <div class="renewal-number">02</div>
+        <div class="renewal-detail-main">
+          <div class="renewal-title"><div><h3>教材總使用量</h3><p>一年教材總使用量超過 480 點，排除贈送或獎勵等 0 元教材。</p></div><span class="status-pill bad">尚未達標</span></div>
+          <div class="renewal-facts"><div><span>公司標準</span><strong>本約期 ＞ 480 點</strong></div><div><span>本約期現況</span><strong>0 點</strong></div><div><span>歷史參考</span><strong>前期管理表記載 1,458</strong></div></div>
+          <p class="evidence-message warn">前期資料不列入本約期計算；新約期教材須重新累計，並排除 0 元教材。</p>
+        </div>
+      </article>
+      <article>
+        <div class="renewal-number">03</div>
+        <div class="renewal-detail-main">
+          <div class="renewal-title"><div><h3>年度器材使用金額</h3><p>一年器材總使用量超過新臺幣 60,000 元。</p></div><span class="status-pill bad">尚未達標</span></div>
+          <div class="renewal-facts"><div><span>公司標準</span><strong>本約期 ＞ 60,000 元</strong></div><div><span>本約期現況</span><strong>0 元</strong></div><div><span>歷史參考</span><strong>近三年器材項目截圖</strong></div></div>
+          <p class="evidence-message warn">本約期尚無可核對的採購金額，須自 2026.07.01 起重新累計。</p>
+        </div>
+      </article>
+      <article>
+        <div class="renewal-number">04</div>
+        <div class="renewal-detail-main">
+          <div class="renewal-title"><div><h3>GNEPT 語文能力檢定</h3><p>每兩年參加長頸鹿美語語文能力檢定的總人數達 50 人以上。</p></div><span class="status-pill bad">尚未達標</span></div>
+          <div class="renewal-facts"><div><span>公司標準</span><strong>本統計期 ≥ 50 人</strong></div><div><span>本約期現況</span><strong>0 人</strong></div><div><span>歷史參考</span><strong>前期管理表記載 129 人</strong></div></div>
+          <p class="evidence-message warn">前期檢定人數僅供趨勢參考；本約期仍須重新確認統計起訖日與累計人數。</p>
+        </div>
+      </article>
+    </div>
+    <div class="dialog-foot">
+      <p><strong>政策優先順序：</strong>公司正式規範 ＞ 主管核定版本 ＞ 分校管理檢核表。</p>
+      <button id="printRenewalDetails" class="primary-button" type="button">列印檢核內容</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js?v=20260703-11"></script>
+</body>
+</html>

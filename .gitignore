@@ -17,4 +17,4 @@ __pycache__/
 # Environment/secrets
 .env
 .env.*
-
+!.env.example

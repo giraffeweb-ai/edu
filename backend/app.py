@@ -9,6 +9,9 @@ import shutil
 import sqlite3
 import unicodedata
 import uuid
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +34,9 @@ INDEX_DIR = DATA_ROOT / "00_資料索引"
 DB_PATH = INDEX_DIR / "教務輔導.db"
 SCHOOL_CSV = INDEX_DIR / "分校清冊.csv"
 OCR_SCRIPT = ROOT / "backend" / "ocr.swift"
+SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 MAX_BATCH_BYTES = 500 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
 ALLOWED_REGIONS = {"北區", "桃區", "中區", "南區", "高區"}
@@ -76,6 +82,49 @@ def data_path(value: str) -> Path:
     return path if path.is_absolute() else current_data_root() / path
 
 
+def supabase_headers(prefer: str = "return=representation") -> dict[str, str]:
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
+    }
+
+
+def supabase_request(method: str, table: str, payload: object | None = None, query: dict[str, str] | None = None) -> object:
+    if not USE_SUPABASE:
+        raise RuntimeError("Supabase is not configured")
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    if query:
+        url = f"{url}?{urlencode(query, safe='(),.*:')}"
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = Request(url, data=body, method=method, headers=supabase_headers("return=representation"))
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else []
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="ignore")
+        raise HTTPException(error.code, f"Supabase {table} {method} 失敗：{detail[:300]}") from error
+    except URLError as error:
+        raise HTTPException(502, f"Supabase 連線失敗：{error.reason}") from error
+
+
+def supabase_insert(table: str, payload: dict[str, object] | list[dict[str, object]]) -> list[dict[str, object]]:
+    result = supabase_request("POST", table, payload)
+    return result if isinstance(result, list) else []
+
+
+def supabase_patch(table: str, payload: dict[str, object], query: dict[str, str]) -> list[dict[str, object]]:
+    result = supabase_request("PATCH", table, payload, query)
+    return result if isinstance(result, list) else []
+
+
+def supabase_get(table: str, query: dict[str, str]) -> list[dict[str, object]]:
+    result = supabase_request("GET", table, query=query)
+    return result if isinstance(result, list) else []
+
+
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -88,6 +137,8 @@ def db_connect() -> sqlite3.Connection:
 
 
 def initialize_database() -> None:
+    if USE_SUPABASE:
+        return
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     SCHOOLS_DIR.mkdir(parents=True, exist_ok=True)
     with db_connect() as db:
@@ -139,6 +190,8 @@ def initialize_database() -> None:
 
 
 def import_existing_schools() -> None:
+    if USE_SUPABASE:
+        return
     rows: list[dict[str, str]] = []
     if SCHOOL_CSV.exists():
         with SCHOOL_CSV.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -255,6 +308,8 @@ def predict_file_year(filename: str, selected_year: str) -> str:
 
 
 def write_school_csv() -> None:
+    if USE_SUPABASE:
+        return
     existing_details: dict[str, dict[str, str]] = {}
     if SCHOOL_CSV.exists():
         with SCHOOL_CSV.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -313,23 +368,65 @@ def upload_to_dict(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def upload_dict_from_supabase(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "schoolCode": row["school_code"],
+        "schoolName": row.get("school_name") or row.get("school_code"),
+        "region": row.get("region") or "",
+        "year": row["year"],
+        "fileCount": row["file_count"],
+        "totalBytes": row["total_bytes"],
+        "createdBy": row["created_by"],
+        "createdAt": str(row["created_at"])[:10].replace("-", "."),
+        "status": row["status"],
+        "analysisStatus": row["analysis_status"],
+        "analysisPath": row.get("analysis_path"),
+    }
+
+
+def supabase_school(code: str) -> dict[str, object] | None:
+    rows = supabase_get("schools", {"code": f"eq.{code}", "select": "*"})
+    return rows[0] if rows else None
+
+
+def supabase_upload(upload_id: str) -> dict[str, object] | None:
+    rows = supabase_get("uploads", {"id": f"eq.{upload_id}", "select": "*"})
+    return rows[0] if rows else None
+
+
 def run_analysis_job(school_code: str, upload_id: str) -> None:
-    with db_connect() as db:
-        school_row = db.execute("SELECT * FROM schools WHERE code = ?", (school_code,)).fetchone()
-        upload_row = db.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
-        file_rows = db.execute(
-            """
-            SELECT original_name, stored_path, predicted_category, file_year
-            FROM upload_files WHERE upload_id = ? ORDER BY id
-            """,
-            (upload_id,),
-        ).fetchall()
+    if USE_SUPABASE:
+        school_row = supabase_school(school_code)
+        upload_row = supabase_upload(upload_id)
+        file_rows = supabase_get(
+            "upload_files",
+            {"upload_id": f"eq.{upload_id}", "select": "original_name,stored_path,predicted_category,file_year", "order": "id.asc"},
+        )
         if not school_row or not upload_row:
             return
-        db.execute(
-            "UPDATE uploads SET status = '分析中', analysis_status = '內容解析中' WHERE id = ?",
-            (upload_id,),
+        supabase_patch(
+            "uploads",
+            {"status": "分析中", "analysis_status": "內容解析中"},
+            {"id": f"eq.{upload_id}"},
         )
+    else:
+        with db_connect() as db:
+            school_row = db.execute("SELECT * FROM schools WHERE code = ?", (school_code,)).fetchone()
+            upload_row = db.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
+            file_rows = db.execute(
+                """
+                SELECT original_name, stored_path, predicted_category, file_year
+                FROM upload_files WHERE upload_id = ? ORDER BY id
+                """,
+                (upload_id,),
+            ).fetchall()
+            if not school_row or not upload_row:
+                return
+            db.execute(
+                "UPDATE uploads SET status = '分析中', analysis_status = '內容解析中' WHERE id = ?",
+                (upload_id,),
+            )
 
     school = {
         "code": school_row["code"],
@@ -348,12 +445,20 @@ def run_analysis_job(school_code: str, upload_id: str) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{upload_id}.json"
         output_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+        analysis_path = data_relative(output_path)
     except Exception as error:
-        with db_connect() as db:
-            db.execute(
-                "UPDATE uploads SET status = '分析失敗', analysis_status = ? WHERE id = ?",
-                (f"分析失敗：{str(error)[:200]}", upload_id),
+        if USE_SUPABASE:
+            supabase_patch(
+                "uploads",
+                {"status": "分析失敗", "analysis_status": f"分析失敗：{str(error)[:200]}"},
+                {"id": f"eq.{upload_id}"},
             )
+        else:
+            with db_connect() as db:
+                db.execute(
+                    "UPDATE uploads SET status = '分析失敗', analysis_status = ? WHERE id = ?",
+                    (f"分析失敗：{str(error)[:200]}", upload_id),
+                )
         return
 
     parsed = int(analysis["summary"]["parsedFiles"])
@@ -369,14 +474,47 @@ def run_analysis_job(school_code: str, upload_id: str) -> None:
         status = "待補資料"
     if not school_row["assigned_to"]:
         status = f"{status} · 待主管指派"
+
+    if USE_SUPABASE:
+        existing = supabase_get("analysis_results", {"upload_id": f"eq.{upload_id}", "select": "upload_id"})
+        analysis_payload = {
+            "upload_id": upload_id,
+            "school_code": school_code,
+            "analysis": analysis,
+            "created_at": analysis.get("generatedAt") or now_iso(),
+        }
+        if existing:
+            supabase_patch("analysis_results", analysis_payload, {"upload_id": f"eq.{upload_id}"})
+        else:
+            supabase_insert("analysis_results", analysis_payload)
+        supabase_patch(
+            "uploads",
+            {"status": status, "analysis_status": analysis_status, "analysis_path": analysis_path},
+            {"id": f"eq.{upload_id}"},
+        )
+        return
+
     with db_connect() as db:
         db.execute(
             "UPDATE uploads SET status = ?, analysis_status = ?, analysis_path = ? WHERE id = ?",
-            (status, analysis_status, data_relative(output_path), upload_id),
+            (status, analysis_status, analysis_path, upload_id),
         )
 
 
 def analyze_pending_uploads() -> None:
+    if USE_SUPABASE:
+        pending = supabase_get(
+            "uploads",
+            {
+                "analysis_status": "in.(尚未開始,等待內容解析,等待後端解析,內容解析中)",
+                "select": "id,school_code",
+                "order": "created_at.asc",
+            },
+        )
+        for row in pending:
+            run_analysis_job(str(row["school_code"]), str(row["id"]))
+        return
+
     with db_connect() as db:
         pending = db.execute(
             """
@@ -406,6 +544,7 @@ def health() -> dict[str, object]:
     return {
         "ok": True,
         "runtime": "vercel" if IS_VERCEL else "local",
+        "storage": "supabase" if USE_SUPABASE else "sqlite",
         "freeBytes": usage.free,
         "maxBatchBytes": MAX_BATCH_BYTES,
         "database": data_relative(DB_PATH),
@@ -414,6 +553,13 @@ def health() -> dict[str, object]:
 
 @app.get("/api/state")
 def state() -> dict[str, object]:
+    if USE_SUPABASE:
+        schools = supabase_get("schools", {"select": "*", "order": "region.asc,code.asc"})
+        uploads = supabase_get("upload_dashboard", {"select": "*", "order": "created_at.desc", "limit": "50"})
+        return {
+            "schools": [school_to_dict(row) for row in schools],
+            "uploads": [upload_dict_from_supabase(row) for row in uploads],
+        }
     with db_connect() as db:
         schools = db.execute("SELECT * FROM schools ORDER BY region, code").fetchall()
         uploads = db.execute(
@@ -451,27 +597,55 @@ async def receive_upload(
     safe_year = year if re.fullmatch(r"(20\d{2}|跨年度)", year) else "待確認年度"
     timestamp = now_iso()
 
-    with db_connect() as db:
-        school = db.execute("SELECT * FROM schools WHERE code = ?", (code,)).fetchone()
+    if USE_SUPABASE:
+        school = supabase_school(code)
         if mode == "new":
             if school:
                 raise HTTPException(409, f"分校代碼 {code} 已存在")
             name = sanitize_school_name(school_name)
             school_folder = ensure_school_folders(region, code, name)
             relative_folder = data_relative(school_folder)
-            db.execute(
-                """
-                INSERT INTO schools
-                    (code, name, region, folder_path, assigned_to, created_by, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, NULL, ?, 'pending_assignment', ?, ?)
-                """,
-                (code, name, region, relative_folder, created_by, timestamp, timestamp),
+            inserted = supabase_insert(
+                "schools",
+                {
+                    "code": code,
+                    "name": name,
+                    "region": region,
+                    "folder_path": relative_folder,
+                    "assigned_to": None,
+                    "created_by": created_by,
+                    "status": "pending_assignment",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                },
             )
-            school = db.execute("SELECT * FROM schools WHERE code = ?", (code,)).fetchone()
+            school = inserted[0] if inserted else supabase_school(code)
         elif not school:
             raise HTTPException(404, "找不到指定分校")
         elif school["region"] != region:
             raise HTTPException(400, "分校與區域不一致")
+    else:
+        with db_connect() as db:
+            school = db.execute("SELECT * FROM schools WHERE code = ?", (code,)).fetchone()
+            if mode == "new":
+                if school:
+                    raise HTTPException(409, f"分校代碼 {code} 已存在")
+                name = sanitize_school_name(school_name)
+                school_folder = ensure_school_folders(region, code, name)
+                relative_folder = data_relative(school_folder)
+                db.execute(
+                    """
+                    INSERT INTO schools
+                        (code, name, region, folder_path, assigned_to, created_by, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, NULL, ?, 'pending_assignment', ?, ?)
+                    """,
+                    (code, name, region, relative_folder, created_by, timestamp, timestamp),
+                )
+                school = db.execute("SELECT * FROM schools WHERE code = ?", (code,)).fetchone()
+            elif not school:
+                raise HTTPException(404, "找不到指定分校")
+            elif school["region"] != region:
+                raise HTTPException(400, "分校與區域不一致")
 
     school_folder = data_path(school["folder_path"])
     ensure_school_folders(school["region"], school["code"], school["name"])
@@ -542,22 +716,56 @@ async def receive_upload(
     manifest_path = manifest_dir / f"{upload_id}.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    with db_connect() as db:
-        db.execute(
-            """
-            INSERT INTO uploads
-                (id, school_code, year, category, file_count, total_bytes, created_by, status, analysis_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (upload_id, code, safe_year, category, len(stored_files), total_bytes, created_by, status, analysis_status, timestamp),
+    if USE_SUPABASE:
+        supabase_insert(
+            "uploads",
+            {
+                "id": upload_id,
+                "school_code": code,
+                "year": safe_year,
+                "category": category,
+                "file_count": len(stored_files),
+                "total_bytes": total_bytes,
+                "created_by": created_by,
+                "status": status,
+                "analysis_status": analysis_status,
+                "analysis_path": None,
+                "created_at": timestamp,
+            },
         )
-        db.executemany(
-            """
-            INSERT INTO upload_files
-                (upload_id, original_name, stored_path, predicted_category, file_year, size_bytes, sha256)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
+        if stored_files:
+            supabase_insert(
+                "upload_files",
+                [
+                    {
+                        "upload_id": upload_id,
+                        "original_name": item["originalName"],
+                        "stored_path": item["storedPath"],
+                        "predicted_category": item["predictedCategory"],
+                        "file_year": item["fileYear"],
+                        "size_bytes": item["sizeBytes"],
+                        "sha256": item["sha256"],
+                    }
+                    for item in stored_files
+                ],
+            )
+    else:
+        with db_connect() as db:
+            db.execute(
+                """
+                INSERT INTO uploads
+                    (id, school_code, year, category, file_count, total_bytes, created_by, status, analysis_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (upload_id, code, safe_year, category, len(stored_files), total_bytes, created_by, status, analysis_status, timestamp),
+            )
+            db.executemany(
+                """
+                INSERT INTO upload_files
+                    (upload_id, original_name, stored_path, predicted_category, file_year, size_bytes, sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
                 (
                     upload_id,
                     item["originalName"],
@@ -568,8 +776,8 @@ async def receive_upload(
                     item["sha256"],
                 )
                 for item in stored_files
-            ],
-        )
+                ],
+            )
     write_school_csv()
     background_tasks.add_task(run_analysis_job, code, upload_id)
     return JSONResponse(
@@ -592,6 +800,27 @@ def assign_school(school_code: str, payload: AssignmentRequest) -> dict[str, obj
     if not counselor_id:
         raise HTTPException(400, "請指定輔導員")
     timestamp = now_iso()
+    if USE_SUPABASE:
+        school = supabase_school(code)
+        if not school:
+            raise HTTPException(404, "找不到指定分校")
+        updated_rows = supabase_patch(
+            "schools",
+            {"assigned_to": counselor_id, "status": "assigned", "updated_at": timestamp},
+            {"code": f"eq.{code}"},
+        )
+        uploads = supabase_get("uploads", {"school_code": f"eq.{code}", "select": "id,analysis_status"})
+        for upload in uploads:
+            analysis_status = upload.get("analysis_status")
+            status = {
+                "分析完成": "分析完成",
+                "部分完成": "部分完成",
+                "待補資料": "待補資料",
+            }.get(str(analysis_status), "已指派 · 分析中")
+            supabase_patch("uploads", {"status": status}, {"id": f"eq.{upload['id']}"})
+        updated = updated_rows[0] if updated_rows else supabase_school(code)
+        return {"ok": True, "school": school_to_dict(updated)}
+
     with db_connect() as db:
         school = db.execute("SELECT * FROM schools WHERE code = ?", (code,)).fetchone()
         if not school:
@@ -620,6 +849,23 @@ def assign_school(school_code: str, payload: AssignmentRequest) -> dict[str, obj
 @app.get("/api/schools/{school_code}/analysis")
 def school_analysis(school_code: str) -> dict[str, object]:
     code = school_code.strip().upper()
+    if USE_SUPABASE:
+        rows = supabase_get(
+            "analysis_results",
+            {"school_code": f"eq.{code}", "select": "upload_id,analysis,created_at", "order": "created_at.asc,upload_id.asc"},
+        )
+        if not rows:
+            raise HTTPException(404, "尚無分析結果")
+        analyses: list[dict[str, object]] = []
+        for row in rows:
+            analysis = row.get("analysis") or {}
+            if isinstance(analysis, dict):
+                analysis["_createdAt"] = row.get("created_at")
+                analyses.append(analysis)
+        if not analyses:
+            raise HTTPException(404, "分析結果檔案不存在")
+        return merge_school_analyses(analyses)
+
     with db_connect() as db:
         uploads = db.execute(
             """
